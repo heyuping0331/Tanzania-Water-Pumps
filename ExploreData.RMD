@@ -1,0 +1,254 @@
+---
+title: "Explore Data"
+author: "Yuping He"
+date: "August 7, 2016"
+output: html_document
+---
+
+```{r}
+library(ggplot2)
+library(gmodels)
+library(googleVis)
+library(corrplot)
+library(FSelector)
+library(lubridate)
+```
+
+
+Predict one of these three classes based on a number of variables about what kind of pump is operating, when it was installed, and how it is managed. A smart understanding of which water points will fail can improve maintenance operations and ensure that clean, potable water is available to communities across Tanzania.
+```{r}
+train_values <- readRDS("train values.rds")
+train_labels <- readRDS("train labels.rds")
+test <- readRDS("test values.rds")
+
+# Merge data frames to create the data frame train
+train <- merge(train_labels, train_values)
+# UConvert to factor levels that can be used as valid R variable names.
+train$status_group <- as.factor(make.names(train$status_group))
+train_labels$status_group <- as.factor(make.names(train$status_group))
+```
+
+
+Continuous Variables Visualization
+```{r}
+# Now subsetting when construction_year is larger than 0
+ggplot(subset(train, construction_year > 0), aes(x = construction_year, fill=status_group)) +
+  geom_histogram(bins = 20) + 
+  facet_grid( ~ status_group) +
+  labs(x="Construction Year") + 
+  theme(panel.grid.minor=element_blank(),
+        legend.position="top") +
+  scale_fill_discrete(name="Well Status:")
+
+# Create a histogram for population
+length(which(train$population==0))
+# too many instanced coded as 0, so code them as NA
+train$population_new <- train$population
+index_0 <- which(train$population_new==0)
+train$population_new[index_0] <- NA
+# Do below for log regression. o wouldn't matter
+test$population_new <- test$population
+
+
+ggplot(train[(train$population<1000) & (train$population>100) ,], aes(x = population)) + 
+  geom_histogram() + 
+  facet_grid( ~ status_group)
+```
+As you can see, the first plot showed us that there were a lot of missing values coded as 0's. After subsetting them out, we could see that there may some differences between the distribution of functional wells and non-functional wells. In alignment with intuition, the later the construction year, the pumps funtion better. Population casts no influence.
+
+Correlation of Continuous Variables
+```{r}
+summary(train[,c('construction_year','amount_tsh','gps_height','longitude','latitude','num_private','region_code','district_code', 'population')])
+
+correlations <- cor(train[,c('construction_year','amount_tsh','gps_height','longitude','latitude','num_private','region_code','district_code', 'population')])
+
+corrplot.mixed(correlations, lower="ellipse", upper="number")
+```
+Conclusion: not much collinearity
+
+Visualizations for variable selection
+```{r}
+str(train)
+
+# quantity
+ggplot(train, aes(x=quantity, fill=status_group)) + 
+  geom_bar() + 
+  theme(legend.position=c(0.8,0.8), 
+        panel.background=element_blank(),
+        axis.line.y = element_line(colour = "black"),
+        axis.line.x = element_line(colour = "black"),
+        legend.background=element_rect(colour="gray"))+
+  scale_fill_discrete(name="Well Status") +
+  labs(title="Well Quantity Level",x=NULL)
+          
+# Create bar plot for quality_group
+ggplot(train, aes(x=quality_group, fill=status_group)) + 
+  geom_bar() + 
+  theme(legend.position=c(0.8,0.8),
+        axis.line.y = element_line(colour = "black"),
+        axis.line.x = element_line(colour = "black"),
+        panel.background=element_blank(),
+        legend.background=element_rect(colour="gray"))+
+  scale_fill_discrete(name="Well Status")+
+  labs(title="Water Quality",x=NULL)
+
+# Create bar plot for waterpoint_type
+ggplot(train, aes(x=waterpoint_type, fill=status_group)) + 
+  geom_bar() + 
+  theme(legend.position=c(0.8,0.8),
+        axis.line.y = element_line(colour = "black"),
+        axis.line.x = element_line(colour = "black"),
+        panel.background=element_blank(),
+        legend.background=element_rect(colour="gray"))+
+  scale_fill_discrete(name="Well Status") + 
+  theme(axis.text.x=element_text(angle = -20, hjust = 0))+
+  labs(title="Waterpoint Type",x=NULL)
+
+# create bar plot for management_group
+ggplot(train, aes(x=management_group, fill=status_group)) + 
+  geom_bar(position="fill") + 
+  theme(#legend.position=c(0.2,0.2),
+        axis.line.y = element_line(colour = "black"),
+        axis.line.x = element_line(colour = "black"),
+        panel.background=element_blank(),
+        legend.background=element_rect(colour="gray"))+
+  scale_fill_discrete(name="Well Status")+
+  labs(title="Management",x=NULL)
+
+# create bar plot for source_type
+ggplot(train, aes(x=source_type, fill=status_group)) + 
+  geom_bar(position="fill") + 
+  theme(axis.line.y = element_line(colour = "black"),
+        axis.line.x = element_line(colour = "black"),
+        axis.text.x = element_text(angle=-20, hjust=0),
+        panel.background=element_blank(),
+        legend.background=element_rect(colour="gray"))+
+  scale_fill_discrete(name="Well Status")+
+  labs(title="Water Source",x=NULL)
+```
+Summary: quantity,quality, waterpoint_type has an influence on well status. Management, source-type cast no influence.
+
+Quantity
+```{r}
+# Look at the number of pumps in each functional status group
+table(train$status_group)
+
+# As proportions
+prop.table(table(train$status_group))
+  
+# Table of the quantity variable vs the status of the pumps
+table(train$quantity, train$status_group)
+summary(train$quantity_group)
+
+# As row-wise proportions, quantity vs status_group
+prop.table(table(train$quantity, train$status_group), margin = 1)
+
+# pivot tables 
+CrossTable(train$quantity, train$status_group, prop.r=TRUE, prop.c = FALSE, prop.t = FALSE, prop.chisq = FALSE)
+```
+If the quantity variable is 'dry', it is likely that the pump is not functional.Dry quantity level is most likely to be non-functional.
+
+
+Two other variables that would be worth checking out would be longitude and latitude. It would make sense that the location of the wells could be connected to the probability that they are functioning. We could look at a histogram of the two variables, but we could be missing some major features of the data.
+First, you can start off creating a scatter plot for longitude and latitude to see where the wells are located throughout the country. Then see if there is any visible clustering around certain areas or landmarks by making the color of the points correspond to the values in status_group.
+Next, you can use the googleVis package to create a map of Tanzania and overlay the locations of the wells. This will give a more visually appealing representation of the water point locations within the country.
+```{r}
+
+# Create scatter plot: latitude vs longitude with color as status_group
+ggplot(subset(train[1:1000,], latitude < 0 & longitude > 0),
+    aes(x = latitude, y = longitude, color = status_group)) + 
+    geom_point(shape = 1) +
+    scale_color_discrete(name="Well Status:")+
+    theme(legend.position = "top")
+
+# Create a column 'latlong' to input into gvisGeoChart
+train$latlong <- paste(round(train$latitude,2), round(train$longitude, 2), sep = ":")
+train$size <- rep(1, nrow(train))
+
+# Use gvisGeoChart to create an interactive map with well locations
+wells_map <- gvisGeoChart(train[1:1000,], locationvar = "latlong", 
+                          colorvar = "status_group", sizevar = "size", 
+                          options = list(region = "TZ"))
+
+# Plot wells_map
+plot(wells_map)
+
+# Remove intermediate variables
+train <- subset(train, select=-c(size, latlong))
+```
+
+Feature selection and feature engineering
+```{r}
+summary(train$installer)
+
+# Make installer lowercase, take first 3 letters as a sub string
+train$install_3 <- substr(tolower(train$installer),1,3)
+train$install_3[train$install_3 %in% c(" ", "", "0", "_", "-")] <- "other"
+
+# Take the top 15 substrings from above by occurance frequency
+install_top_15 <- names(summary(as.factor(train$install_3)))[1:15]
+train$install_3[!(train$install_3 %in% install_top_15)] <- "other"
+train$install_3 <- as.factor(train$install_3)
+
+# Table of the install_3 variable vs the status of the pumps
+table(train$install_3, train$status_group)
+
+# As row-wise proportions, install_3 vs status_group
+prop.table(table(train$install_3, train$status_group), margin = 1)
+
+# Create install_3 for the test set using same top 15 from above
+test$install_3 <- substr(tolower(test$installer),1,3)
+test$install_3[test$install_3 %in% c(" ", "", "0", "_", "-")] <- "other"
+test$install_3[!(test$install_3 %in% install_top_15)] <- "other"
+test$install_3 <- as.factor(test$install_3)
+```
+It looks like there are a few installer groups that show a high proportion of non functional wells.
+
+```{r}
+
+# train$funder_top[train$funder_top %in% c(" ", "", "0", "_", "-")] <- "other"
+
+# Take the top 15 substrings from above by occurance frequency
+funder_top_14 <- names(summary(train$funder))[c(1,3:14,17)]
+train$funder_top <- as.character(train$funder)
+train$funder_top[!(train$funder_top %in% funder_top_14)] <- "other"
+train$funder_top <- as.factor(train$funder_top)
+
+test$funder_top <- as.character(test$funder)
+test$funder_top[!(test$funder_top %in% funder_top_14)] <- "other"
+test$funder_top <- as.factor(test$funder_top)
+
+
+# As row-wise proportions, install_3 vs status_group
+prop.table(table(train$funder_top, train$status_group), margin = 1)
+```
+2 banks show high proportion of functional wells.
+
+Time lapse in years
+```{r}
+train$date_recorded <- ymd(train$date_recorded)
+train[train$construction_year==0, 'construction_year'] <- NA
+train$construction_year_date <- paste(train$construction_year, "-01-01")
+train$construction_year_date <- ymd(train$construction_year_date)
+train$usage_years <- difftime(train$date_recorded, train$construction_year_date, units='days')
+train$usage_years <- as.numeric(train$usage_years) / 365
+
+summary(train$usage_years)
+
+
+# Make the same change to test set.
+test$date_recorded <- ymd(test$date_recorded)
+test[test$construction_year==0, 'construction_year'] <- NA
+test$construction_year_date <- paste(test$construction_year, "-01-01")
+test$construction_year_date <- ymd(test$construction_year_date)
+test$usage_years <- difftime(test$date_recorded, test$construction_year_date, units='days')
+test$usage_years <- as.numeric(test$usage_years) / 365
+
+summary(test$usage_years)
+```
+
+Information Gain
+```{r}
+weights <- information.gain(status_group~., train)
+```
+

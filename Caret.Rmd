@@ -1,0 +1,328 @@
+---
+title: "Caret"
+author: "Yuping He"
+date: "March 3, 2017"
+output: html_document
+---
+libraries
+```{r}
+library(caret)
+#library(glmnet)
+library(rpart)
+library(AppliedPredictiveModeling)
+library(ranger)
+```
+
+Import data
+```{r}
+train <- readRDS('train.rds')
+test <- readRDS('test values.rds')
+```
+
+Pre-processing
+```{r}
+# Create custom indices, so we can compare models with matching train/test indices.
+set.seed(42)
+myFolds <- createFolds(train[,2], k = 5)
+
+# Create reusable trainControl object
+myControl <- trainControl(
+  summaryFunction = multiClassSummary,
+  classProbs = TRUE, 
+  verboseIter = TRUE,
+  savePredictions = TRUE,
+  index = myFolds
+)
+
+# Preprocess data iwith selected features.
+features <- c("longitude", "latitude", "extraction_type_group", "quality_group", "quantity", "waterpoint_type", "install_3", "funder_top","region_code", "usage_years", "payment_type", "population_new", "amount_tsh", "source_type")
+
+preprocessParams <- preProcess(train[,features], method=c("knnImpute", "center", "scale", 'nzv'))
+preprocessParams
+
+train_processed <- predict(preprocessParams, newdata=train[,features], verbose=T)
+train_processed <- cbind(train[,'status_group'], train_processed)
+colnames(train_processed)[1] <- "status_group"
+
+test_processed <- predict(preprocessParams, newdata=test[,features])
+```
+
+featureplot
+```{r, eval=FALSE}
+# Scatter plot matrix
+transparentTheme(trans = .4)
+plot1 <- featurePlot(x = train_processed[, c('longitude', 'latitude', 'region_code', "district_code", "usage_years", "amount_tsh", 'population_new')], 
+            y = train_processed$status_group, 
+            plot = "pairs",
+            # Add a key at the top
+            auto.key = list(columns = 3))
+
+# Overlayed density plots
+transparentTheme(trans = .9)
+plot2 <- featurePlot(x = train[, c('longitude', 'latitude')], 
+            y = train$status_group,
+            plot = "density", 
+            # Pass in options to xyplot() to 
+            # make it prettier
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            layout = c(2, 1), 
+            auto.key = list(columns = 3))
+plot3 <- featurePlot(x = train[, c('region_code', "district_code")], 
+            y = train$status_group,
+            plot = "density", 
+            # Pass in options to xyplot() to 
+            # make it prettier
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            layout = c(2, 1), 
+            auto.key = list(columns = 3))
+
+plot3.2 <- featurePlot(x = train[train$region_code<25 & train$district_code<25, c('region_code', "district_code")], 
+            y = train[train$region_code<25 & train$district_code<25, "status_group"],
+            plot = "density", 
+            # Pass in options to xyplot() to 
+            # make it prettier
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            layout = c(2, 1), 
+            auto.key = list(columns = 3))
+
+plot4 <- featurePlot(x = train[, c("usage_years", "amount_tsh", 'population_new')], 
+            y = train$status_group,
+            plot = "density", 
+            # Pass in options to xyplot() to 
+            # make it prettier
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            layout = c(1, 3), 
+            auto.key = list(columns = 3))
+plot4.2 <- featurePlot(x = train[train$population_new<2000, c("population_new")], 
+            y = train[train$population_new<2000, "status_group"],
+            plot = "density", 
+            # Pass in options to xyplot() to 
+            # make it prettier
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            #layout = c(1, 3), 
+            auto.key = list(columns = 3))
+
+# Box plots
+plot5 <- featurePlot(x = train[, "usage_years"], 
+            y = train$status_group, 
+            plot = "box", 
+            # Pass in options to bwplot() 
+            scales = list(y = list(relation="free"),
+                          x = list(rot = 90)),
+            auto.key = list(columns = 3))
+
+"install_3", "funder_top", "payment_type", "source_type"
+```
+Summary: 
+1) amount_tsh highly related to funtional. 
+2) usage_years differentiates all 3 classes. 
+3) district_code isn't useful.
+3) funtional.needs.repair is unusually high from region_code [15,20].
+4) Population_new isn't useful.
+
+
+Logistic Regression - takes extremely long to train
+```{r}
+model_log<- train(status_group~., data=train_processed,
+  tuneGrid = expand.grid(alpha=seq(0.1,1,length=10), lambda=seq(0.0001,1,length=20)),
+  method = "glmnet",
+  family="multinomial",
+  trControl = myControl
+)
+
+model_log$results
+model_log$bestTune
+plot(model_log)
+
+varImp(model_log,scale=F)
+
+# alpha = 0.1, lambda=0.0001, acc=0.73, mean_ROC=0.799, mean_sen=0.52, mean_spec=0.82
+```
+
+Decision Tree
+```{r}
+model_tree <- train(status_group ~., data = train_processed, 
+                   method = "rpart",
+                   trControl=myControl,
+                   tuneLength = 40, 
+                   metric='Mean_ROC',
+                   parms=list(split='information'))
+
+model_tree$results
+model_tree$bestTune
+model_tree$pred
+plot(model_tree)
+varImp(model_tree,scale=F)
+# cp=0.0004, mean_roc0.79, acc=0.74, mean_sen=0.56, mean_spec=0.83
+
+pred <- predict(model_tree, newdata=train_processed, type = 'raw')
+confusionMatrix(pred, train_processed$status_group)
+```
+
+Decision Tree2: loss matrix
+```{r}
+model_tree2 <- train(status_group ~., data = train_processed, 
+                   method = "rpart",
+                   trControl=myControl,
+                   tuneLength = 40, 
+                   metric='Mean_ROC',
+                   parms=list(loss = matrix(c(0,2,2,1,0,1,2,2,0),ncol=3)))
+
+model_tree2$results
+model_tree2$bestTune
+model_tree2$pred
+plot(model_tree2)
+varImp(model_tree2,scale=F)
+# cp=0.00042, mean_roc0.79, acc=0.71, mean_sen=0.61, mean_spec=0.83
+
+pred <- predict(model_tree2, newdata=train_processed, type = 'raw')
+confusionMatrix(pred, train_processed$status_group)
+```
+
+Decision Tree3: prior probs
+```{r}
+model_tree3 <- train(status_group ~., data = train_processed, 
+                   method = "rpart",
+                   trControl=myControl,
+                   tuneLength = 50, 
+                   metric='Mean_ROC',
+                   parms=list(split='information',prior = c(0.4,0.2,0.4)))
+
+model_tree3$results
+model_tree3$bestTune
+model_tree3$pred
+plot(model_tree)
+varImp(model_tree3,scale=F)
+# cp=0.0004421355, mean_roc0.79, acc=0.69, mean_sen=0.63, mean_spec=0.83
+
+pred <- predict(model_tree3, newdata=train_processed, type = 'raw')
+confusionMatrix(pred, train_processed$status_group)
+```
+
+Random Forest: min.node.size=10, mum.trees=500
+```{r}
+# set.seed(1000)
+model_forest <- train(
+  status_group ~.,
+  tuneLength=3,
+  data = train_processed, method = "ranger",
+  trControl = myControl,
+  importance = "impurity"
+)
+
+model_forest$bestTune
+model_forest$finalModel$min.node.size # 10
+model_forest$finalModel$num.trees # 500
+model_forest$results
+plot(model_forest)
+
+varImp(model_forest,scale=F)
+
+# mtry=38, mean_roc=0.86, acc=0.776, mean_sen=0.62, mean_spec=0.85
+pred <- predict(model_forest, newdata=train_processed, type = 'prob')
+pred_class <- predict(model_forest, newdata=train_processed, type = 'raw')
+
+confusionMatrix(pred_class,train$status_group)
+
+```
+
+Random Forest2: min.node.size=100, num.trees=500
+```{r}
+model_forest2 <- train(
+  status_group ~.,
+  tuneLength=5,
+  data = train_processed, method = "ranger",
+  trControl = myControl,
+  importance = "impurity",
+  min.node.size=100
+)
+
+model_forest2$bestTune # mtry=56
+model_forest2$finalModel$min.node.size # 100
+model_forest2$finalModel$num.trees # 500
+model_forest2$results
+plot(model_forest2)
+
+varImp(model_forest2,scale=F)
+
+# mtry=38, mean_roc=0.86, acc=0.776, mean_sen=0.62, mean_spec=0.85
+# pred <- predict(model_forest2, newdata=train_processed, type = 'prob')
+pred_class <- predict(model_forest2, newdata=train_processed, type = 'raw')
+
+confusionMatrix(pred_class,train$status_group)
+
+```
+
+Random Forest3: min.node.size=5, num.trees=500
+```{r}
+model_forest23 <- train(
+  status_group ~.,
+  tuneLength=5,
+  data = train_processed, method = "ranger",
+  trControl = myControl,
+  importance = "impurity",
+  min.node.size=5
+)
+
+model_forest23$bestTune # mtry=19
+model_forest23$finalModel$min.node.size # 5
+model_forest23$finalModel$num.trees # 500
+model_forest23$results
+plot(model_forest23)
+
+varImp(model_forest23,scale=F)
+
+# mtry=38, mean_roc=0.86, acc=0.776, mean_sen=0.62, mean_spec=0.85
+
+
+pred_class <- predict(model_forest23, newdata=train_processed, type = 'raw')
+
+confusionMatrix(pred_class,train$status_group)
+
+```
+
+Compare models
+```{r}
+# Create model_list
+model_list <- list(Random_Forest=model_forest23, Decision_Tree=model_tree)
+
+# Pass model_list to resamples(): resamples
+resamples <- resamples(model_list)
+
+# Summarize the results
+summary(resamples)
+resamples$values
+
+# Box-and-whisker plot
+bwplot(resamples, metric="Mean_ROC")
+
+xyplot(resamples, metric="Mean_ROC")
+```
+
+
+Export prediction
+```{r, eval=FALSE}
+d <- predict(model_forest23, test_processed)
+# Create submission data frame
+submission <- data.frame(test$id)
+submission$status_group <- d
+names(submission)[1] <- "id"
+
+write.csv(submission, file = "submission_forest.csv", row.names = F)
+```
+
