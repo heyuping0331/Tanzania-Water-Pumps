@@ -34,8 +34,8 @@ myControl <- trainControl(
   index = myFolds
 )
 
-# Preprocess data iwith selected features.
-features <- c("longitude", "latitude", "extraction_type_group", "quality_group", "quantity", "waterpoint_type", "install_3", "funder_top","region_code", "usage_years", "payment_type", "population_new", "amount_tsh", "source_type")
+# Preprocess data with selected features.
+features <- c("longitude", "latitude", "extraction_type_group", "quality_group", "quantity", "waterpoint_type", "install_3", "funder_top","region_code", "usage_years", "payment_type", "amount_tsh", "source", "construction_year")
 
 preprocessParams <- preProcess(train[,features], method=c("knnImpute", "center", "scale", 'nzv'))
 preprocessParams
@@ -270,7 +270,7 @@ confusionMatrix(pred_class,train$status_group)
 
 Random Forest3: min.node.size=5, num.trees=500
 ```{r}
-model_forest23 <- train(
+model_forest3 <- train(
   status_group ~.,
   tuneLength=5,
   data = train_processed, method = "ranger",
@@ -279,27 +279,73 @@ model_forest23 <- train(
   min.node.size=5
 )
 
-model_forest23$bestTune # mtry=19
-model_forest23$finalModel$min.node.size # 5
-model_forest23$finalModel$num.trees # 500
-model_forest23$results
-plot(model_forest23)
+model_forest3$bestTune # mtry=19
+model_forest3$finalModel$min.node.size # 5
+model_forest3$finalModel$num.trees # 500
+model_forest3$results
+plot(model_forest3)
 
-varImp(model_forest23,scale=F)
+varImp(model_forest3,scale=F)
 
 # mtry=38, mean_roc=0.86, acc=0.776, mean_sen=0.62, mean_spec=0.85
 
 
-pred_class <- predict(model_forest23, newdata=train_processed, type = 'raw')
+pred_class <- predict(model_forest3, newdata=train_processed, type = 'raw')
 
 confusionMatrix(pred_class,train$status_group)
 
 ```
 
+Ramdom Forest4: min.node.size=10, num.trees=100, filtered features
+```{r}
+model_forest4 <- train(
+  status_group ~.,
+  tuneLength=3,
+  data = train_processed, method = "ranger",
+  trControl = myControl,
+  importance = "impurity", num.trees = 100, min.node.size = 10
+)
+
+model_forest4$bestTune # mtry=39
+model_forest4$results
+plot(model_forest4)
+
+varImp(model_forest4,scale=F)
+
+# mtry=39, mean_roc=0.857, acc=0.771, mean_sen=0.61, mean_spec=0.85
+
+
+pred <- predict(model_forest4, train_processed)
+confusionMatrix(pred, train_processed$status_group) #acc 0.8982
+```
+mean_roc: 0.856,0.857,0.858,0.858,0.859,0.860
+acc:0.769,0.770,0.771,0.771,0.772,0.772
+
+Random Forest5: min.node.size=10, num.trees=100, filtered features
+```{r}
+model_forest5 <- train(
+  status_group ~.,
+  tuneLength=5,
+  data = train_processed, method = "ranger",
+  trControl = myControl,
+  importance = "impurity", min.node.size=10
+)
+model_forest5$bestTune # mtry=20
+model_forest5$results
+plot(model_forest5)
+
+varImp(model_forest5,scale=F)
+
+# mtry=39, mean_roc=0.857, acc=0.771, mean_sen=0.61, mean_spec=0.85
+
+
+```
+
+
 Compare models
 ```{r}
 # Create model_list
-model_list <- list(Random_Forest=model_forest23, Decision_Tree=model_tree)
+model_list <- list(Random_Forest=model_forest4, Random_Forest2=model_forest5)
 
 # Pass model_list to resamples(): resamples
 resamples <- resamples(model_list)
@@ -313,11 +359,12 @@ bwplot(resamples, metric="Mean_ROC")
 
 xyplot(resamples, metric="Mean_ROC")
 ```
-
+mean_roc: 0.860,0.861,0.861,0.862,0.862,0.864
+acc: 0.773,0.773,0.774,0.774,0.775,0.776
 
 Export prediction
 ```{r, eval=FALSE}
-d <- predict(model_forest23, test_processed)
+d <- predict(model_forest5, test_processed)
 # Create submission data frame
 submission <- data.frame(test$id)
 submission$status_group <- d
